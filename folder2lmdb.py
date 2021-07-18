@@ -15,10 +15,12 @@ from os.path import basename
 
 import torch
 import torch.utils.data as data
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import transforms
 from torchvision.datasets import ImageFolder
 from torchvision import transforms, datasets
+
+from utils.read_files import get_paths_from_images
 
 
 class ImageFolderWithPaths(datasets.ImageFolder):
@@ -27,6 +29,21 @@ class ImageFolderWithPaths(datasets.ImageFolder):
         path = self.imgs[index][0]
         tuple_with_path = (original_tuple + (path,))
         return tuple_with_path
+
+
+class ImageFilesPath(Dataset):
+    def __init__(self, dir, loader) -> None:
+        super(ImageFilesPath).__init__()
+        self.loader = loader
+        self.paths = get_paths_from_images(dir)
+
+    def __getitem__(self, index):
+        path = self.paths[index]
+        img = self.loader(path)
+        return img, path
+
+    def __len__(self):
+        return len(self.paths)
 
 
 def loads_pyarrow(buf):
@@ -115,16 +132,19 @@ def dumps_pyarrow(obj):
     return pa.serialize(obj).to_buffer()
 
 
-def folder2lmdb(dpath, name="train", write_frequency=5000):
+def folder2lmdb(dpath, out_dir, data_name="train", write_frequency=5000):
     all_imgpath = []
     all_idxs = []
-    directory = osp.expanduser(osp.join(dpath, name))
+    directory = dpath #osp.expanduser(osp.join(dpath, name))
     print("Loading dataset from %s" % directory)
-    dataset = ImageFolderWithPaths(directory, loader=raw_reader)
+
+    dataset = ImageFilesPath(directory, loader=raw_reader)
     data_loader = DataLoader(dataset, num_workers=16, collate_fn=lambda x: x)
 
-    lmdb_path = osp.join(dpath, "%s.lmdb" % name)
+    lmdb_path = osp.join(out_dir, "%s.lmdb" % data_name)
     isdir = os.path.isdir(lmdb_path)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
 
     print("Generate LMDB to %s" % lmdb_path)
     db = lmdb.open(lmdb_path, subdir=isdir,
@@ -135,7 +155,7 @@ def folder2lmdb(dpath, name="train", write_frequency=5000):
     for idx, data in enumerate(data_loader):
         # print(type(data), data)
         # image, label = data[0]
-        image, label, imgpath = data[0]
+        image, imgpath = data[0]
         # print(image.shape)
         imgpath = basename(imgpath)
         all_imgpath.append(imgpath)
@@ -158,9 +178,9 @@ def folder2lmdb(dpath, name="train", write_frequency=5000):
     db.sync()
     db.close()
 
-    fout = open(dpath + "/" + name + "_images_idx.txt", "w")
-    for img, idx in zip(all_imgpath, all_idxs):
-        fout.write("{} {}\n".format(img, idx))
+    fout = open(out_dir + "/" + data_name + "_images_idx.txt", "w")
+    for img_path, idx in zip(all_imgpath, all_idxs):
+        fout.write("{} {}\n".format(img_path, idx))
     fout.close()
 
 
